@@ -47,11 +47,6 @@ import queue
 
 parser = argparse.ArgumentParser(description='PyTorch + mavsdk -- zero shot detection, tracking, and drone control')
 
-parser.add_argument('--siam_tracker_model', 
-                     type=str, metavar='PATH',default= 'SiamMask/experiments/siammask_sharp/SiamMask_DAVIS.pth',
-                     help='path to latest checkpoint (default: none)')
-parser.add_argument('--config', dest='config', default='SiamMask/experiments/siammask_sharp/config_davis.json',
-                    help='hyper-parameter of SiamMask in json format')
 parser.add_argument('--base_path', default='../../data/tennis', help='datasets')
 parser.add_argument('--cpu', action='store_true', default =False,  help='cpu mode')
 parser.add_argument('--use_16bit', action='store_true',  default =False, help='16 bit dino mode')
@@ -79,7 +74,7 @@ parser.add_argument('--detect_only', default = False, action='store_true', help=
 parser.add_argument('--use_sam', default = False, action='store_true', help='use sam')
 parser.add_argument('--fps', default = 0, type=float, help='parse video frames as in fps>1')
 
-parser.add_argument('--tracker', default='aot',help='siammask/aot')
+parser.add_argument('--tracker', default='aot',help='aot')
 parser.add_argument('--detect', default='dino', help='dino/click/box/clip')
 parser.add_argument('--redetect_by', default='tracker', help='dino/click/box/clip/tracker')
 
@@ -112,10 +107,7 @@ if args.detect == 'clip':
     clip = clip.cuda()
 elif  args.detect == 'dino':
     pass
-if args.tracker == 'siammask':
-    sys.path.append("./SiamMask")
-    sys.path.append("./SiamMask/experiments/siammask_sharp")
-    from SiamMask.tools.test import *
+
 
 def multiclass_vis(class_labels, img_to_viz, num_of_labels, np_used = False,alpha = 0.5):
     _overlay = img_to_viz.astype(float) / 255.0
@@ -193,17 +185,6 @@ def get_aot_tracker_with_sam():
     segtracker.restart_tracker()
     return segtracker
 
-def get_siammask_tracker(siam_cfg, device):
-
-    from custom import Custom
-    
-    siammask = Custom(anchors=siam_cfg['anchors'])
-    if args.siam_tracker_model:
-        assert isfile(args.siam_tracker_model), 'Please download {} first.'.format(args.siam_tracker_model)
-        siammask = load_pretrain(siammask, args.siam_tracker_model)
-    siammask.eval().to(device)
-
-    return siammask
 
 def plot_similarity_if_neded(cfg, frame, similarity_rel, alpha = 0.5):
     if cfg['plot visualizations'] or cfg["save_images_to"]:
@@ -455,51 +436,7 @@ def compute_area_and_center(bounding_shape):
    
     return area, center
 
-def track_object_with_siammask(siammask, detections, video, cfg, tracker_cfg, vehicle):
-    x, y, w, h = detections[0]#todo
-    print(x, y, w, h)
-    toc = 0
-    f=0
-    while 1:
 
-        ret, im = video.read()
-        if not ret:
-            print("No stream!!!")
-            break 
-        im = cv2.resize(im, (cfg['desired_width'],cfg['desired_height']))
-        im_store = copy.deepcopy(im)
-        tic = cv2.getTickCount()
-        
-        if f == 0:  # init
-            
-            target_pos = np.array([x + w / 2, y + h / 2])
-            target_sz = np.array([w, h])
-            state = siamese_init(im, target_pos, target_sz, siammask, tracker_cfg['hp'], device=device)  # init tracker
-        elif f > 0:  # tracking
-            state = siamese_track(state, im, mask_enable=True, refine_enable=True, device=device)  # track
-            location = state['ploygon'].flatten()
-            mask = state['mask'] > state['p'].seg_thr
-
-            im[:, :, 2] = (mask > 0) * 255 + (mask == 0) * im[:, :, 2]
-
-            bounding_shape = np.int0(location).reshape((-1, 1, 2))
-            _, mean_point = compute_area_and_center(bounding_shape)
-            compute_drone_action_while_tracking(mean_point, cfg, vehicle)
-
-            cv2.polylines(im, [bounding_shape], True, (0, 255, 0), 3)
-            cv2.imshow('Tracker-result', im)
-            if cfg['save_images_to']:
-                cv2.imwrite("{}/Tracker-result/{}.jpg".format(cfg['save_images_to'],f),im) 
-            key = cv2.waitKey(cfg['wait_key'])
-            if key > 0: break
-            if cfg['save_images_to']:
-                cv2.imwrite("{}/Stream_tracking/{}.jpg".format(cfg['save_images_to'],f),im_store) 
-
-        f+=1
-        toc += cv2.getTickCount() - tic
-    toc /= cv2.getTickFrequency()
-    fps = f / toc
-    print('SiamMask Time: {:02.1f}s Speed: {:3.1f}fps (with visulization!)'.format(toc, fps))
 
 
 def create_video_from_images(cfg):
@@ -545,10 +482,7 @@ def init_system():
     
     # Setup Tracker Model
     print("Init tracker...")
-    if cfg['tracker'] == 'siammask':
-        tracker_cfg = load_config(args)
-        tracker = get_siammask_tracker(siam_cfg = tracker_cfg, device = device)
-    elif  cfg['tracker'] == 'aot':
+    if  cfg['tracker'] == 'aot':
         tracker = get_aot_tracker_with_sam()
         tracker_cfg = None
     else:
@@ -827,20 +761,16 @@ def detect_by_box(sam , video, cfg, vehicle):
         
 
         if state > 1:
-            if cfg['tracker'] == 'siammask':
-                res = [[p1[0], p1[1], p2[0]-p1[0], p2[1]-p1[1] ]]
-                return res, None, frame
-            else:
-                sam.set_image(frame)
-                input_box = np.array([p1[0], p1[1], p2[0], p2[1]])
-                masks, _, _ = sam.predict(
-                                #point_coords=input_point,
-                                #point_labels=input_label,
-                                box=input_box,
-                                multimask_output=False,
-                        )
+            sam.set_image(frame)
+            input_box = np.array([p1[0], p1[1], p2[0], p2[1]])
+            masks, _, _ = sam.predict(
+                            #point_coords=input_point,
+                            #point_labels=input_label,
+                            box=input_box,
+                            multimask_output=False,
+                    )
 
-                return input_box, masks, frame
+            return input_box, masks, frame
  
         #drone_action_wrapper_while_detecting(vehicle,cfg)
 
@@ -876,20 +806,13 @@ def start_mission(device, tracker_cfg, cfg, tracker, detector, segmentor, querie
 
     bounding_boxes, masks, saved_frame = detect_object(cfg, detector, segmentor, video, queries)
     
-    if cfg['tracker'] == "siammask":
-        track_object_with_siammask(siammask=tracker, 
-                                   detections=bounding_boxes, 
-                                   video=video, cfg=cfg, 
-                                   tracker_cfg =tracker_cfg, 
-                                   vehicle = vehicle)
-    else:
-        status = track_object_with_aot(tracker, masks, saved_frame,  
-                                       video, cfg, vehicle)
-        if status == 'FAILED': 
-            print("Redtecting....")
-            start_mission(device, tracker_cfg, cfg, tracker, 
-                          detector, segmentor, queries, 
-                          video, vehicle)
+    status = track_object_with_aot(tracker, masks, saved_frame,  
+                                    video, cfg, vehicle)
+    if status == 'FAILED': 
+        print("Redtecting....")
+        start_mission(device, tracker_cfg, cfg, tracker, 
+                        detector, segmentor, queries, 
+                        video, vehicle)
 
 if __name__ == '__main__':
     # Setup device
