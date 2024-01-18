@@ -4,9 +4,9 @@ docker build -t sam_image:1.0 .
 
 docker run -itd --privileged -v /tmp/.X11-unix:/tmp/.X11-unix:ro -e DISPLAY=$DISPLAY --gpus all --network=host --name=sam sam_image:1.0 /bin/bash
 
-conda create -n sam python=3.9.12 && conda activate sam && pip install torch torchvision gradio mavsdk rtsp open_clip_torch natsort PyQt5
+conda install python=3.9.12 && pip install torch torchvision gradio mavsdk rtsp open_clip_torch natsort PyQt5
 
-pip uninstall opencv-python && pip install opencv-python-headless
+# 若在服务器上运行：pip uninstall opencv-python && pip install opencv-python-headless
 
 cd /workspace && git clone https://github.com/superboySB/FollowAnything 
 
