@@ -11,7 +11,7 @@ conda install python=3.9.12 && pip install torch torchvision gradio mavsdk rtsp 
 cd /workspace && git clone https://github.com/superboySB/FollowAnything 
 
 ```
-在`FollowAnything/Segment-and-Track-Anything/ckpt`位置下载[SAM-TIE-B](https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth)以及[R50-DeAOT-L](https://drive.google.com/file/d/1QoChMkTVxdYZ_eBlZhK2acq9KMQZccPJ/view)
+在`FollowAnything/Segment-and-Track-Anything/ckpt`位置下载[SAM-VIT-B](https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth)以及[R50-DeAOT-L](https://drive.google.com/file/d/1QoChMkTVxdYZ_eBlZhK2acq9KMQZccPJ/view)
 ```sh
 cd /workspace/FollowAnything/Segment-and-Track-Anything && bash script/install.sh
 ```
