@@ -15,7 +15,6 @@ sys.path.append("./Segment-and-Track-Anything")
 sys.path.append("./Segment-and-Track-Anything/aot")
 
 from DRONE.drone_controller import *
-from VIDEO.video import *
 
 from collections import OrderedDict
 import copy
@@ -32,6 +31,7 @@ from DINO.collect_dino_features import *
 from DINO.dino_wrapper import *
 from sam.segment_anything import sam_model_registry, SamPredictor
 from SegTracker import SegTracker
+from video import ThreadedCamera,create_video_from_images
 
 
 import asyncio
@@ -47,6 +47,11 @@ import queue
 
 parser = argparse.ArgumentParser(description='PyTorch + mavsdk -- zero shot detection, tracking, and drone control')
 
+parser.add_argument('--siam_tracker_model', 
+                     type=str, metavar='PATH',default= 'SiamMask/experiments/SiamMask_DAVIS.pth',
+                     help='path to latest checkpoint (default: none)')
+parser.add_argument('--config', dest='config', default='SiamMask/experiments/config_davis.json',
+                    help='hyper-parameter of SiamMask in json format')
 parser.add_argument('--base_path', default='../../data/tennis', help='datasets')
 parser.add_argument('--cpu', action='store_true', default =False,  help='cpu mode')
 parser.add_argument('--use_16bit', action='store_true',  default =False, help='16 bit dino mode')
@@ -74,9 +79,8 @@ parser.add_argument('--detect_only', default = False, action='store_true', help=
 parser.add_argument('--use_sam', default = False, action='store_true', help='use sam')
 parser.add_argument('--fps', default = 0, type=float, help='parse video frames as in fps>1')
 
-parser.add_argument('--tracker', default='aot',help='aot')
-parser.add_argument('--detect', default='dino', help='dino/click/box/clip')
-parser.add_argument('--redetect_by', default='tracker', help='dino/click/box/clip/tracker')
+parser.add_argument('--detect', default='dino', help='dino/click/box')
+parser.add_argument('--redetect_by', default='tracker', help='dino/click/box/tracker')
 
 parser.add_argument('--wait_key', default=30, type=int, help='cv waitkey')
 
@@ -101,13 +105,9 @@ parser.add_argument('--sort_by', default="area",  help='stability_score|area|pre
 args = parser.parse_args()
 cmap = matplotlib.cm.get_cmap("jet")
 
-if args.detect == 'clip':
-    tokenizer = open_clip.get_tokenizer('ViT-B-32')
-    clip, _, clip_preprocess = open_clip.create_model_and_transforms('ViT-B-32', pretrained='laion2b_s34b_b79k')
-    clip = clip.cuda()
-elif  args.detect == 'dino':
-    pass
-
+sys.path.append("./SiamMask")
+sys.path.append("./SiamMask/experiments")
+from SiamMask.tools.test import *
 
 def multiclass_vis(class_labels, img_to_viz, num_of_labels, np_used = False,alpha = 0.5):
     _overlay = img_to_viz.astype(float) / 255.0
@@ -142,49 +142,40 @@ def get_vis_anns(anns,img_to_viz):
     
 def get_queries(cfg):
     queries = OrderedDict({})
-    if cfg['detect'] == 'clip':
-        input_queries = cfg['text_query']
-        text = tokenizer(input_queries.split(","))
+    for file_name in os.listdir(cfg['queries_dir']):
+        if file_name.startswith("feat") and file_name.endswith(".pt"):
+            full_path = "{}/{}".format(cfg['queries_dir'], file_name)
+            query = torch.load(full_path) 
+            if not isinstance(query, list): # annotations
+                query = [query]
+            key = file_name[4:-3]
+            queries[key] = query
         
-        text_features = clip.encode_text(text.cuda())
-        text_features /= text_features.norm(dim=-1, keepdim=True)
+    if not queries.keys(): 
+            print("No annotations found in {}!!!!, see step 1 and script annotate_features.py".format(cfg['queries_dir']))
+            exit("1")
 
-        for idx,query in enumerate(input_queries.split(",")):
-            queries[query] = text_features[idx]
+    if cfg['metric'] == 'closest_mean':
+        mean_queries = OrderedDict({})
+        for key,query in queries.items():
+            query = torch.stack(query).cuda().mean(dim=0)
+            query = torch.nn.functional.normalize(query, dim=0)
+            mean_queries[key] = query
+        return mean_queries
+    else:
         return queries
 
-    else:
-        queries = OrderedDict({})
-        for file_name in os.listdir(cfg['queries_dir']):
-            if file_name.startswith("feat") and file_name.endswith(".pt"):
-                full_path = "{}/{}".format(cfg['queries_dir'], file_name)
-                query = torch.load(full_path) 
-                if not isinstance(query, list): # annotations
-                    query = [query]
-                key = file_name[4:-3]
-                queries[key] = query
-            
-        if not queries.keys(): 
-                print("No annotations found in {}!!!!, see step 1 and script annotate_features.py".format(cfg['queries_dir']))
-                exit("1")
 
-        if cfg['metric'] == 'closest_mean':
-            mean_queries = OrderedDict({})
-            for key,query in queries.items():
-                query = torch.stack(query).cuda().mean(dim=0)
-                query = torch.nn.functional.normalize(query, dim=0)
-                mean_queries[key] = query
-            return mean_queries
-        else:
-            return queries
+def get_siammask_tracker(siam_cfg, device):
+    from custom import Custom
+    
+    siammask = Custom(anchors=siam_cfg['anchors'])
+    if args.siam_tracker_model:
+        assert isfile(args.siam_tracker_model), 'Please download {} first.'.format(args.siam_tracker_model)
+        siammask = load_pretrain(siammask, args.siam_tracker_model)
+    siammask.eval().to(device)
 
-
-def get_aot_tracker_with_sam():
-    ###modify args if needed###
-    segtracker = SegTracker(segtracker_args, sam_args, aot_args)
-    segtracker.restart_tracker()
-    return segtracker
-
+    return siammask
 
 def plot_similarity_if_neded(cfg, frame, similarity_rel, alpha = 0.5):
     if cfg['plot visualizations'] or cfg["save_images_to"]:
@@ -247,15 +238,13 @@ def automatic_object_detection(vit_model, sam, video, queries, cfg, vehicle):
                 
             
             t = time.time()
-            if cfg['detect'] == "dino":
-                frame_preprocessed = preprocess_frame(frame, cfg=cfg)
-                img_feat = vit_model.forward(frame_preprocessed)
-                img_feat_norm = torch.nn.functional.normalize(img_feat, dim=1)
-                #print("Dino took", time.time() - t)
+            frame_preprocessed = preprocess_frame(frame, cfg=cfg)
+            img_feat = vit_model.forward(frame_preprocessed)
+            img_feat_norm = torch.nn.functional.normalize(img_feat, dim=1)
+            print("Dino took", time.time() - t)
 
             #smoothing by mean
             if cfg['use_sam']:
-
                 cosine_similarity = torch.nn.CosineSimilarity()
                 class_labels = torch.zeros((frameshow.shape[0],frameshow.shape[1]))
                 thresh = torch.zeros((frameshow.shape[0],frameshow.shape[1]))
@@ -264,20 +253,7 @@ def automatic_object_detection(vit_model, sam, video, queries, cfg, vehicle):
                     if ii == 0: continue
                     mask_similarity = []
                     m = mask['segmentation']
-                    if  cfg['detect'] == 'clip':
-                        #if ii == 0: continue
-                        if ii == 0 or mask['area']< float(cfg['min_area_size']): continue
-                        _x, _y, _w, _h = tuple(mask["bbox"])  # xywh bounding box
-                        
-                        img_roi = frameshow[_y : _y + _h, _x : _x + _w, :]
-                        
-                        img_roi = Image.fromarray(img_roi)
-                        img_roi = clip_preprocess(img_roi).unsqueeze(0).cuda()
-                        roifeat = vit_model.encode_image(img_roi)
-
-                        mask_feature = torch.nn.functional.normalize(roifeat, dim=-1)
-                    else:
-                        mask_feature = img_feat_norm[:,:,m].mean(axis=2)
+                    mask_feature = img_feat_norm[:,:,m].mean(axis=2)
                     
                     tmp_map_dict = {}
                     counter_item = 0
@@ -287,8 +263,6 @@ def automatic_object_detection(vit_model, sam, video, queries, cfg, vehicle):
                         counter_item += 1
                    
                     if len(queries.items()) >1 :
-                        if  cfg['detect'] == 'clip' and ii ==0: 
-                            continue
                         mask_label = torch.argmax(torch.as_tensor(mask_similarity))  # 1, H, W 
                         
                         mask['label'] = tmp_map_dict[int(mask_label)]
@@ -300,12 +274,6 @@ def automatic_object_detection(vit_model, sam, video, queries, cfg, vehicle):
                         all_masks_sims.append(mask_similarity[0]) 
                         if float(mask_similarity[0]) > float(cfg['class_threshold']):  thresh[m] = 1
 
-                        
-                #if  len(queries.items()) == 1 and cfg['query_type'] == 'text':      #if mask_similarity[0] > 0.9:
-                #    sorted_sims = np.argsort(all_masks_sims)
-                #    for masks in masks[sorted_sims[:k]]
-                #    thresh[m] = 1 
-                #    mask['dino_label'] = 1
                         
             else:
                 if len(queries.keys()) == 1:
@@ -429,51 +397,71 @@ def compute_area_and_center(bounding_shape):
     up_point = bounding_shape[idx_up]
     bottum_point = bounding_shape[idx_bottum]
 
-
-    #area, center = compute_area_and_center(right_point, left_point, up_point, bottum_point)
     area = np.linalg.norm(up_point - left_point)* np.linalg.norm(up_point - right_point)
     center = np.mean([right_point, left_point, up_point, bottum_point], axis = 0)
    
     return area, center
 
+def track_object_with_siammask(siammask, detections, video, cfg, tracker_cfg, vehicle):
+    x, y, w, h = detections[0]#todo
+    print(x, y, w, h)
+    toc = 0
+    f=0
+    while 1:
+
+        ret, im = video.read()
+        if not ret:
+            print("No stream!!!")
+            break 
+        im = cv2.resize(im, (cfg['desired_width'],cfg['desired_height']))
+        im_store = copy.deepcopy(im)
+        tic = cv2.getTickCount()
+        
+        if f == 0:  # init
+            
+            target_pos = np.array([x + w / 2, y + h / 2])
+            target_sz = np.array([w, h])
+            state = siamese_init(im, target_pos, target_sz, siammask, tracker_cfg['hp'], device=device)  # init tracker
+        elif f > 0:  # tracking
+            state = siamese_track(state, im, mask_enable=True, refine_enable=True, device=device)  # track
+            
+            location = state['ploygon'].flatten()
+            mask = state['mask'] > state['p'].seg_thr
+
+            im[:, :, 2] = (mask > 0) * 255 + (mask == 0) * im[:, :, 2]
+
+            bounding_shape = np.int0(location).reshape((-1, 1, 2))
+            _, mean_point = compute_area_and_center(bounding_shape)
+
+            if state['score']<0.95 and cfg['redetect_by']!= 'tracker':
+                print(f"Similarty is {state['score']} too low!!!")
+                return "FAILED"
+
+            compute_drone_action_while_tracking(mean_point, cfg, vehicle)
+
+            cv2.polylines(im, [bounding_shape], True, (0, 255, 0), 3)
+            # cv2.imshow('Tracker-result', im)
+            if cfg['save_images_to']:
+                cv2.imwrite("{}/Tracker-result/{}.jpg".format(cfg['save_images_to'],f),im) 
+            key = cv2.waitKey(cfg['wait_key'])
+            if key > 0: break
+            if cfg['save_images_to']:
+                cv2.imwrite("{}/Stream_tracking/{}.jpg".format(cfg['save_images_to'],f),im_store) 
+
+        f+=1
+        toc += cv2.getTickCount() - tic
+    toc /= cv2.getTickFrequency()
+    fps = f / toc
+    print('SiamMask Time: {:02.1f}s Speed: {:3.1f}fps (with visulization!)'.format(toc, fps))
 
 
 
-def create_video_from_images(cfg):
 
-    import glob
-    vfile= '{}/video_from_images.avi'.format(cfg['path_to_video'])
-    fileidx = 0
-    if not  os.path.exists(vfile):
-        img_array = []
-        if cfg['video_order'] == 'any':
-            for filename in os.listdir(cfg['path_to_video']):
-                filename = os.path.join(cfg['path_to_video'],filename )
-                img = cv2.imread(filename)
-                height, width, layers = img.shape
-                size = (width,height)
-                img_array.append(img)
-                fileidx+=1
-        else:
-            while 1:
-                filename = os.path.join(cfg['path_to_video'], f"{fileidx:06d}.png")
-                if not os.path.exists(filename): 
-                    filename = os.path.join(cfg['path_to_video'], "1_{}.jpg".format(fileidx))#f"{fileidx}.jpg")
-                if not os.path.exists(filename):    
-                    break
-                img = cv2.imread(filename)
-                height, width, layers = img.shape
-                size = (width,height)
-                img_array.append(img)
-                fileidx+=1
-
-        out = cv2.VideoWriter('{}/video_from_images.avi'.format(cfg['path_to_video']),cv2.VideoWriter_fourcc(*'DIVX'), 15, size)
-         
-        for i in range(len(img_array)):
-            out.write(img_array[i])
-        out.release()
-    cfg['path_to_video'] = vfile
-    return cv2.VideoCapture(cfg['path_to_video']) 
+def get_aot_tracker_with_sam():
+    ###modify args if needed###
+    segtracker = SegTracker(segtracker_args, sam_args, aot_args)
+    segtracker.restart_tracker()
+    return segtracker
 
 def init_system():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -482,32 +470,16 @@ def init_system():
     
     # Setup Tracker Model
     print("Init tracker...")
-    if  cfg['tracker'] == 'aot':
-        tracker = get_aot_tracker_with_sam()
-        tracker_cfg = None
-    else:
-        print("Exiting. No such tracker {}".format(cfg['tracker']))
-        exit(9)
-
+    tracker_cfg = load_config(args)
+    tracker = get_siammask_tracker(siam_cfg = tracker_cfg, device = device)
     
     print("Init Segmentor...")
     # Setup 0-shot segmentor
-    if cfg['tracker'] !=  'aot':
-        segmentor = get_aot_tracker_with_sam()
-    else:
-        segmentor = tracker
-
+    segmentor = get_aot_tracker_with_sam()
     
     # Setup 0-shot detector
-    print("Init Detector...")
-    if cfg['detect'] == 'clip':
-        if cfg['text_query'] == "":
-            print("Exiting. No text query is provided while using clip")
-            exit(9)
-        queries = get_queries(cfg=cfg)
-        detector = clip
-        
-    elif cfg['detect'] == "dino":
+    print("Init Detector...")        
+    if cfg['detect'] == "dino":
         detector = get_dino_pixel_wise_features_model(cfg = cfg, device = device)
         print("Init queries...")
         # Setup queries to compare
@@ -525,7 +497,7 @@ def init_system():
     if os.path.isdir(cfg["path_to_video"]):
         print("Making video from images in directory {}".format(cfg["path_to_video"]))
         video = create_video_from_images(cfg)
-    elif os.path.exists(cfg["path_to_video"]) and cfg['fps']<1:
+    elif os.path.exists(cfg["path_to_video"]) and cfg['fps']<1:   # √
         print("Reading video  {}".format(cfg["path_to_video"]))
         video = cv2.VideoCapture(cfg["path_to_video"]) 
     else:
@@ -675,65 +647,7 @@ def compute_drone_action_while_tracking(mean_point, cfg, vehicle):
                                                        direction_vector[2],
                                                        K= 1.5, yaw_K = 0.15 ))
     
-def track_object_with_aot(tracker, pred_mask, frame,  video, cfg, vehicle, track_single_object = True):
-    
-    tracker.restart_tracker()
 
-    if track_single_object:
-        pred_mask[pred_mask!=1] = 0 
-    
-    mean_points  = []
-    timing = 0; frame_idx = 0
-    
-    with torch.cuda.amp.autocast():
-        while 1: # 
-            t = time.time()
-            ##############################################
-            #frame = cv2.cvtColor(frame,cv2.COLOR_BGR2RGB)
-            if frame_idx == 0:
-                torch.cuda.empty_cache()
-                gc.collect()
-                tracker.add_reference(frame, pred_mask)
-            else:
-                pred_mask = tracker.track(frame,update_memory=True)
-
-            if track_single_object: pred_mask[pred_mask!=1] = 0 
-            torch.cuda.empty_cache()
-            gc.collect()
-            ###############################################
-
-            mean_point = get_mean_point(pred_mask)
-            if mean_point is None and cfg['redetect_by']!= 'tracker': return "FAILED"
-            
-            compute_drone_action_while_tracking(mean_point, cfg, vehicle)
-           
-            ##############################################
-            vis_masks = multiclass_vis(pred_mask, frame, np.max(pred_mask) + 1, np_used = True)
-            plot_and_save_if_neded(cfg, frame, "Stream_tracking",frame_idx)
-            plot_and_save_if_neded(cfg, vis_masks, 'Tracker-result',frame_idx,multiply = 255)
-            print("processed frame {}, obj_num {}".format(frame_idx,tracker.get_obj_num()),end='\r')
-            
-            ##############################################
-
-            frame_idx += 1
-            read_one_frame = False
-            while not read_one_frame:
-                read_one_frame, frame = video.read()
-                if not read_one_frame and os.path.exists(cfg["path_to_video"]) and cfg['fps']<1:
-                    print("Finished reading video...")
-                    exit(0)
-
-            frame = cv2.resize(frame, (cfg['desired_width'],cfg['desired_height']))
-        
-def get_mean_point(pred_mask, bounding_shape = None):
-    
-    if not pred_mask is None:
-        object_indx = (pred_mask == 1).nonzero()
-
-        if object_indx[0].shape[0] == 0:
-            return None ## restart mission
-    mean_point = [int(object_indx[0].mean()),  int(object_indx[1].mean())]
-    return mean_point
 def detect_by_box(sam , video, cfg, vehicle): 
     cv2.namedWindow('Choose_object')#, cv2.WINDOW_NORMAL)
     cv2.setMouseCallback('Choose_object', on_mouse)
@@ -761,22 +675,12 @@ def detect_by_box(sam , video, cfg, vehicle):
         
 
         if state > 1:
-            sam.set_image(frame)
-            input_box = np.array([p1[0], p1[1], p2[0], p2[1]])
-            masks, _, _ = sam.predict(
-                            #point_coords=input_point,
-                            #point_labels=input_label,
-                            box=input_box,
-                            multimask_output=False,
-                    )
-
-            return input_box, masks, frame
- 
-        #drone_action_wrapper_while_detecting(vehicle,cfg)
+            res = [[p1[0], p1[1], p2[0]-p1[0], p2[1]-p1[1] ]]
+            return res, None, frame
 
 def detect_object(cfg, detector, segmentor, video, queries):
     print("aplying {} detection...".format(cfg['detect']))
-    if cfg['detect'] in ['dino', 'clip']:
+    if cfg['detect'] == 'dino':
         bounding_boxes, masks_of_sam, saved_frame = automatic_object_detection(vit_model=detector, sam = segmentor, 
                                                                                video=video, queries=queries, 
                                                                                cfg=cfg, vehicle=vehicle)
@@ -797,6 +701,8 @@ def detect_object(cfg, detector, segmentor, video, queries):
         else:
             masks_of_sam = None 
     return bounding_boxes, masks_of_sam, saved_frame
+
+
 def start_mission(device, tracker_cfg, cfg, tracker, detector, segmentor, queries, video, vehicle):
     global mission_counter
     mission_counter +=1
@@ -806,8 +712,11 @@ def start_mission(device, tracker_cfg, cfg, tracker, detector, segmentor, querie
 
     bounding_boxes, masks, saved_frame = detect_object(cfg, detector, segmentor, video, queries)
     
-    status = track_object_with_aot(tracker, masks, saved_frame,  
-                                    video, cfg, vehicle)
+    status = track_object_with_siammask(siammask=tracker, 
+                                detections=bounding_boxes, 
+                                video=video, cfg=cfg, 
+                                tracker_cfg =tracker_cfg, 
+                                vehicle = vehicle)
     if status == 'FAILED': 
         print("Redtecting....")
         start_mission(device, tracker_cfg, cfg, tracker, 

@@ -17,6 +17,8 @@ cd /workspace/FollowAnything/Segment-and-Track-Anything && bash script/install.s
 ```
 测试效果
 ```sh
-python follow_anything.py --desired_height 240 --desired_width 320 --path_to_video example_videos/car_following.avi --save_images_to outputs/ --detect dino --redetect_by tracker --use_sam --tracker aot --queries_dir queries/toy_car_following --desired_feature 0 
+cd /workspace/FollowAnything/
+
+python follow_anything.py --desired_height 240 --desired_width 320 --path_to_video example_videos/car_following.avi --save_images_to outputs/ --detect dino --redetect_by tracker --use_sam --tracker siammask --queries_dir queries/toy_car_following --desired_feature 0 
 ```
 如果有图形界面可以加`--plot_visualization`.

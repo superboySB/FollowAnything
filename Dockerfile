@@ -4,7 +4,7 @@ FROM nvcr.io/nvidia/pytorch:23.12-py3
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=en_US.UTF-8 LANGUAGE=en_US:en LC_ALL=en_US.UTF-8
 RUN apt-get update && apt-get install -y locales && locale-gen en_US.UTF-8
-RUN DEBIAN_FRONTEND=noninteractive apt-get install -y htop tmux libxkbcommon-x11-0 libxcb-xinerama0 libgtk2.0-dev pkg-config
+RUN DEBIAN_FRONTEND=noninteractive apt-get install -y htop tmux libxkbcommon-x11-0 libxcb-xinerama0 libgtk2.0-dev pkg-config libgl1-mesa-glx
 
 # Conda
 RUN mkdir ~/miniconda3 && cd ~ && \

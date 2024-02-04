@@ -108,7 +108,4 @@ class VITFeatureExtractor(torch.nn.Module):
             feat = upsample_feat_vec(feat, [self.desired_height, self.desired_width])
         return feat
 
-def binary_boundaries(labels, cutoff=0.5):  
-  return [consecutive(channel.nonzero()[0]) for channel in binarize(labels, cutoff)]
-
 

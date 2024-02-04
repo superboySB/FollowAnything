@@ -1,3 +1,13 @@
+*.pyc
+*.pyo
+*.pyd
+__py
+**/__pycache__/
+data
+**.egg-info
+*.onnx
+.hypothesis
+
 outputs/
 result/
 results/

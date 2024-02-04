@@ -1,0 +1,16 @@
+[2024-02-03 02:11:45,315-rk0-test.py#558] Namespace(arch='Custom', config='config_vot.json', resume='SiamMask_VOT.pth', mask=True, refine=True, dataset='VOT2018', log='log_test.txt', visualization=False, save_mask=False, gt=False, video='', cpu=False, debug=False)
+[2024-02-03 02:11:45,473-rk0-features.py# 66] Current training 0 layers:
+	
+[2024-02-03 02:11:45,473-rk0-features.py# 66] Current training 1 layers:
+	
+[2024-02-03 02:11:45,522-rk0-load_helper.py# 31] load pretrained model from SiamMask_VOT.pth
+[2024-02-03 02:11:45,708-rk0-load_helper.py# 25] remove prefix 'module.'
+[2024-02-03 02:11:45,710-rk0-load_helper.py# 18] used keys:356
+[2024-02-03 02:12:45,181-rk0-test.py#558] Namespace(arch='Custom', config='config_vot.json', resume='SiamMask_VOT.pth', mask=True, refine=True, dataset='VOT2016', log='log_test.txt', visualization=False, save_mask=False, gt=False, video='', cpu=False, debug=False)
+[2024-02-03 02:12:45,338-rk0-features.py# 66] Current training 0 layers:
+	
+[2024-02-03 02:12:45,338-rk0-features.py# 66] Current training 1 layers:
+	
+[2024-02-03 02:12:45,388-rk0-load_helper.py# 31] load pretrained model from SiamMask_VOT.pth
+[2024-02-03 02:12:45,592-rk0-load_helper.py# 25] remove prefix 'module.'
+[2024-02-03 02:12:45,594-rk0-load_helper.py# 18] used keys:356
