@@ -1,0 +1,8 @@
+onnx==1.14.1
+onnxruntime-gpu==1.14.0
+onnxoptimizer
+opencv-python
+numpy
+loguru
+cupy-cuda11x
+torch

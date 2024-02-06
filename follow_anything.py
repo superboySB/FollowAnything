@@ -23,7 +23,6 @@ import time
 from PIL import Image
 from scipy.signal import butter, filtfilt
 
-import open_clip
 from model_args import aot_args,sam_args,segtracker_args
 from PIL import Image
 
